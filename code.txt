@@ -1,7 +1,6 @@
 // user_interface.py
 import os
 
-
 class UserInterface:
     def __init__(self):
         self.interactive_mode = False
@@ -31,65 +30,92 @@ class UserInterface:
     def confirm_execution(self):
         return input("Execute command? (y/n): ").lower() == 'y'
 
-// aishell.py
-#!/usr/bin/env python3
+    def display_prompt(self):
+        print(f"{os.getcwd()}$ ", end='', flush=True)
 
+// aishell.py
 import os
 import sys
-import termios
-import tty
-import signal
-from terminal_controller import TerminalController
+import subprocess
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.lexers import PygmentsLexer
+from pygments.lexers.shell import BashLexer
+
 from llm_interface import LLMInterface
 from command_executor import CommandExecutor
-from user_interface import UserInterface
 from context_manager import ContextManager
 
-def main():
-    # Initialize components
-    llm_interface = LLMInterface()
-    command_executor = CommandExecutor()
-    context_manager = ContextManager()
-    user_interface = UserInterface()
+class AIShell:
+    def __init__(self):
+        self.llm_interface = LLMInterface()
+        self.command_executor = CommandExecutor()
+        self.context_manager = ContextManager()
+        self.running = True
+        self.session = PromptSession(
+            history=FileHistory(os.path.expanduser('~/.aishell_history')),
+            auto_suggest=AutoSuggestFromHistory(),
+            lexer=PygmentsLexer(BashLexer)
+        )
 
-    # Create the terminal controller
-    with TerminalController() as controller:
-        # Main loop
-        while True:
+    def run(self):
+        while self.running:
             try:
-                char = controller.getch()
-                if char == b'\x09':  # Ctrl-I
-                    command = controller.handle_ctrl_i()
-                    if command == 'n':
-                        instruction = user_interface.get_instruction()
-                        llm_response = llm_interface.generate_command(instruction)
-                        user_interface.display_command(llm_response)
-                        if not user_interface.interactive_mode:
-                            command_executor.execute(llm_response)
-                        else:
-                            if user_interface.confirm_execution():
-                                command_executor.execute(llm_response)
-                    elif command == 's':
-                        user_interface.display_message("LLM mode stopped.")
-                    elif command == 'a':
-                        question = user_interface.get_question()
-                        context = context_manager.get_context()
-                        answer = llm_interface.answer_question(question, context)
-                        user_interface.display_answer(answer)
-                    elif command == 'l':
-                        limit = user_interface.get_limit()
-                        command_executor.set_limit(limit)
-                    elif command == 'i':
-                        user_interface.toggle_interactive_mode()
-                else:
-                    # Normal terminal operation
-                    os.write(sys.stdout.fileno(), char)
+                command = self.session.prompt(f"{os.getcwd()}$ ")
+                self.execute_command(command)
             except KeyboardInterrupt:
-                # Handle Ctrl-C
-                os.write(sys.stdout.fileno(), b'^C\n')
+                continue
             except EOFError:
-                # Handle Ctrl-D
-                break
+                print("Exiting AIShell...")
+                self.running = False
+
+    def execute_command(self, command):
+        if command.strip() == "exit":
+            print("Exiting AIShell...")
+            self.running = False
+            return
+
+        if command.strip().startswith("llm"):
+            instruction = command.strip()[4:]
+            llm_response = self.llm_interface.generate_command(instruction)
+            print(f"Generated command: {llm_response}")
+            if input("Execute command? (y/n): ").lower() == 'y':
+                self.run_shell_command(llm_response)
+        else:
+            self.run_shell_command(command)
+
+    def run_shell_command(self, command):
+        try:
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            while True:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None:
+                    break
+                if output:
+                    print(output.strip())
+            
+            for line in process.stderr:
+                print(line.strip(), file=sys.stderr)
+
+            return_code = process.poll()
+            if return_code:
+                print(f"Command exited with return code {return_code}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error executing command: {e}", file=sys.stderr)
+
+def main():
+    aishell = AIShell()
+    aishell.run()
 
 if __name__ == "__main__":
     main()
@@ -292,23 +318,57 @@ if __name__ == "__main__":
 
 // command_executor.py
 import subprocess
+import threading
+import signal
+import json
+import sys
 
 class CommandExecutor:
     def __init__(self):
         self.limit = None
         self.execution_count = 0
+        self.current_process = None
 
-    def execute(self, command):
+    def execute(self, command_json):
         if self.limit and self.execution_count >= self.limit:
             print("Execution limit reached. Use 'Ctrl-I l' to set a new limit.")
             return
 
         try:
-            result = subprocess.run(command, shell=True, check=True, text=True, capture_output=True)
-            print(result.stdout)
+            command_dict = json.loads(command_json)
+            if "bash" not in command_dict:
+                print("Invalid command format. Expected JSON with 'bash' key.")
+                return
+
+            command = command_dict["bash"]
+            self.current_process = subprocess.Popen(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            def read_output(pipe, file):
+                for line in iter(pipe.readline, ''):
+                    file.write(line)
+                    file.flush()
+
+            stdout_thread = threading.Thread(target=read_output, args=(self.current_process.stdout, sys.stdout))
+            stderr_thread = threading.Thread(target=read_output, args=(self.current_process.stderr, sys.stderr))
+
+            stdout_thread.start()
+            stderr_thread.start()
+
+            self.current_process.wait()
+            stdout_thread.join()
+            stderr_thread.join()
+
             self.execution_count += 1
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON command: {e}", file=sys.stderr)
         except subprocess.CalledProcessError as e:
-            print(f"Error executing command: {e}")
+            print(f"Error executing command: {e}", file=sys.stderr)
+        finally:
+            self.current_process = None
+
+    def stop_current_command(self):
+        if self.current_process:
+            self.current_process.send_signal(signal.SIGINT)
 
     def set_limit(self, limit):
         self.limit = limit
@@ -319,6 +379,8 @@ class CommandExecutor:
 
 // llm_interface.py
 import os
+import json
+import sys
 from openai import AzureOpenAI
 
 class LLMInterface:
@@ -330,19 +392,47 @@ class LLMInterface:
         )
         self.deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 
-    def generate_command(self, instruction):
+    def is_valid_bash_command(self, response_content: str) -> bool:
         try:
-            response = self.client.chat.completions.create(
-                model=self.deployment_name,
-                messages=[
-                    {"role": "system", "content": "You are an AI assistant that generates bash commands."},
-                    {"role": "user", "content": f"Generate a bash command for: {instruction}"}
-                ]
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            print(f"Error generating command: {e}")
-            return None
+            response_json = json.loads(response_content)
+            return isinstance(response_json, dict) and "bash" in response_json and isinstance(response_json["bash"], str)
+        except json.JSONDecodeError:
+            return False
+
+    def generate_command(self, instruction):
+        messages = [
+            {"role": "system", "content": "You are an AI assistant that generates bash commands. You are in a terminal, and so you adhere very strictly to formatting requests."},
+            {"role": "user", "content": f'Generate a bash command for: {instruction}; output it in the format: {{"bash": "<command>"}}'}
+        ]
+
+        retries = 2
+
+        while retries > 0:
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.deployment_name,
+                    messages=messages
+                )
+                response_content = response.choices[0].message.content.strip()
+
+                # Extract JSON part from the response content
+                start_index = response_content.find('{')
+                end_index = response_content.rfind('}') + 1
+                if start_index != -1 and end_index != -1:
+                    response_content = response_content[start_index:end_index]
+
+                if self.is_valid_bash_command(response_content):
+                    return response_content["bash"]
+                else:
+                    messages.append({"role": "assistant", "content": response_content})
+                    messages.append({"role": "user", "content": 'Your format is invalid and MUST be in the form of {"bash": "<command>"} as valid JSON.'})
+                    retries -= 1
+            except Exception as e:
+                print(f"Error generating command: {e}", file=sys.stderr)
+                return False
+
+        print("The LLM could not properly respond after multiple attempts.", file=sys.stderr)
+        return False
 
     def answer_question(self, question, context):
         try:

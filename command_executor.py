@@ -1,6 +1,7 @@
 import subprocess
 import threading
 import signal
+import sys
 
 class CommandExecutor:
     def __init__(self):
@@ -33,7 +34,7 @@ class CommandExecutor:
 
             self.execution_count += 1
         except subprocess.CalledProcessError as e:
-            print(f"Error executing command: {e}")
+            print(f"Error executing command: {e}", file=sys.stderr)
         finally:
             self.current_process = None
 
