@@ -54,11 +54,10 @@ class AIShell:
             self.handle_ctrl_i_i()
         elif command in ['h', '?']:
             self.print_ctrl_i_help()
-        elif command in ['q', 'exit']:
-            self.ctrl_i_active = False
-            print("Exiting Ctrl-I mode")
+            return True
         else:
             print("Invalid command - Ctrl-I ? for help")
+        return False
 
     def run(self):
         while self.running:
@@ -66,7 +65,9 @@ class AIShell:
                 if self.ctrl_i_active:
                     self.display_aishell_status()
                     command = self.session.prompt("Ctrl-I> ")
-                    self.process_ctrl_i_command(command.strip())
+                    stay_in_ctrl_i = self.process_ctrl_i_command(command.strip())
+                    if not stay_in_ctrl_i:
+                        self.ctrl_i_active = False
                 else:
                     command = self.session.prompt(f"{os.getcwd()}$ ")
                     if command is not None:
@@ -76,8 +77,15 @@ class AIShell:
                 self.ctrl_i_active = False
                 continue
             except EOFError:
-                print("\nExiting AIShell...")
-                self.running = False
+                if self.ctrl_i_active:
+                    print("\nExiting Ctrl-I mode")
+                    self.ctrl_i_active = False
+                elif not self.session.buffer.text:
+                    print("\nExiting AIShell...")
+                    self.running = False
+                else:
+                    print("\nUse Ctrl-D again to exit")
+                continue
             except Exception as e:
                 print(f"An error occurred: {str(e)}")
                 self.ctrl_i_active = False
@@ -144,7 +152,8 @@ class AIShell:
         l: Set a limit (max number of actions without confirmation)
         i: Toggle interactive mode
         h or ?: Display this help message
-        q or exit: Exit Ctrl-I mode
+        
+        Press Enter or any other key to exit Ctrl-I mode
         """
         print(help_text)
 
