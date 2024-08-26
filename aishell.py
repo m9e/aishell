@@ -13,6 +13,8 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.lexers import PygmentsLexer
+from prompt_toolkit import print_formatted_text, HTML
+from prompt_toolkit.styles import Style
 from pygments.lexers.shell import BashLexer
 from llm_interface import LLMInterface
 from command_executor import CommandExecutor
@@ -32,7 +34,8 @@ class AIShell:
         self.interactive_mode = True
         self.execution_limit = None
         self.execution_count = 0
-        
+        self.debug_mode = False
+
         self.kb = KeyBindings()
         self.setup_key_bindings()
         
@@ -62,6 +65,19 @@ class AIShell:
 
     def display_aishell_status(self):
         print_formatted_text(HTML('\n<bold>AIShell</bold> '), end='', flush=True)
+
+        
+    def toggle_debug_mode(self):
+        self.debug_mode = not self.debug_mode
+        print(f"Debug mode {'enabled' if self.debug_mode else 'disabled'}.")
+
+    def print_debug(self, message):
+        if self.debug_mode:
+            style = Style.from_dict({
+                'debug': '#FFFF00 bold',
+            })
+            print_formatted_text(HTML(f"<debug>{message}</debug>"), style=style)
+
 
 
     def run(self):
@@ -110,6 +126,8 @@ class AIShell:
             self.handle_ctrl_e_l()
         elif command == 'i':
             self.handle_ctrl_e_i()
+        elif command == 'd':
+            self.toggle_debug_mode()
         elif command in ['h', '?']:
             self.print_ctrl_e_help()
         else:
@@ -189,6 +207,7 @@ class AIShell:
         self.execution_count = 0
         print(f"Interactive mode {'enabled' if self.interactive_mode else 'disabled'}.")
 
+
     def print_ctrl_e_help(self):
         help_text = (
             "Ctrl-E Commands:\n"
@@ -197,6 +216,7 @@ class AIShell:
             "a: Ask a question (using terminal buffer as context)\n"
             "l: Set a limit (max number of actions without confirmation)\n"
             "i: Toggle interactive mode\n"
+            "d: Toggle debug mode\n"
             "h or ?: Display this help message\n\n"
             "Press Enter or any other key to exit Ctrl-E mode\n"
         )
@@ -235,10 +255,7 @@ class AIShell:
         return system_info
 
     def process_instruction(self, instruction):
-        # Get system information
         system_info = self.get_system_info()
-        
-        # Add system information to the context
         system_info_str = "System Information:\n" + "\n".join([f"{k}: {v}" for k, v in system_info.items()])
         context = self.context_manager.get_context()
         context.append({"role": "system", "content": system_info_str})
@@ -247,6 +264,9 @@ class AIShell:
         
         while continue_execution and self.running:
             try:
+                self.print_debug(f"Sending instruction to LLM: {instruction}")
+                self.print_debug(f"Context: {json.dumps(context, indent=2)}")
+
                 bash_command, error = self.llm_interface.generate_command(
                     instruction, 
                     context, 
@@ -260,8 +280,13 @@ class AIShell:
                     return
 
                 if bash_command:
+                    self.print_debug(f"Received response from LLM: {bash_command}")
                     try:
                         command_data = json.loads(bash_command)
+                        if 'savecontext' in command_data:
+                            print(f"AI Assistant note: {command_data['savecontext']}")
+                            context.append({"role": "assistant", "content": command_data['savecontext']})
+                            continue
                         bash_command = command_data.get('bash')
                         if not bash_command:
                             print("Error: 'bash' key not found in command data")
@@ -290,13 +315,11 @@ class AIShell:
                             print(f"stdout: {stdout}")
                             print(f"stderr: {stderr}")
                             
-                            # Provide feedback to the LLM and ask for correction
                             correction_instruction = f"The previous command '{bash_command}' failed with return code {return_code}. stdout: {stdout}, stderr: {stderr}. Please provide a corrected command or explain why it failed and suggest an alternative approach."
                             context.append({"role": "user", "content": correction_instruction})
                             continue_execution = True
                             continue
                         
-                        # Update context with the latest command and its output
                         context = self.context_manager.get_context()
                         
                         if bash_command.startswith("echo ") and "reason to stop" in bash_command:

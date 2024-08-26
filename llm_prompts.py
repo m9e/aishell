@@ -23,7 +23,7 @@ class LLMPrompts:
     - Output ONLY ONE command at a time. If a task requires multiple steps, include the 'continue': true attribute in your output; you will have a chance to respond and will have the stdout/err from the previous step
     - For file creation or modification, use heredoc syntax: 'cat <<EOF > filename\\ncontents\\nEOF'
     - The interpreter will execute your JSON-formatted bash command. Other content will NOT be executed.
-    - You may add a note using: {{"savecontext": "<context>"}}. The interpreter will prioritize returning this to you.
+    - You may add a note using: {{"savecontext": "<context>"}} as an ADDITIONAL attribute - you must still include a command. The interpreter will prioritize returning this to you.
     - Commands from the 'user' (with input/stdout/stderr JSON) were executed by the user.
     - Commands from you (assistant) were determined and run by you, with the response provided.
     - Be extremely careful with commands that can modify the user's environment, overwrite files, or change packages.
