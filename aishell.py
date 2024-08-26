@@ -1,3 +1,4 @@
+# aishell.py
 import os
 import sys
 import json
@@ -59,16 +60,14 @@ class AIShell:
             self.handle_ctrl_e_i()
         elif command in ['h', '?']:
             self.print_ctrl_e_help()
-            return True
         else:
             print("Invalid command - Ctrl-E ? for help")
-        return False
-
 
     def run(self):
         while self.running:
             try:
                 if self.ctrl_e_active:
+                    self.display_aishell_status()
                     command = self.terminal_controller.handle_ctrl_e()
                     self.process_ctrl_e_command(command.strip())
                     self.ctrl_e_active = False
@@ -94,21 +93,18 @@ class AIShell:
                 print(f"An error occurred: {str(e)}")
                 self.ctrl_e_active = False
 
-    def process_ctrl_e_command(self, command):
-        if command == 'n':
-            self.handle_ctrl_e_n()
-        elif command == 's':
-            self.handle_ctrl_e_s()
-        elif command == 'a':
-            self.handle_ctrl_e_a()
-        elif command == 'l':
-            self.handle_ctrl_e_l()
-        elif command == 'i':
-            self.handle_ctrl_e_i()
-        elif command in ['h', '?']:
-            self.print_ctrl_e_help()
-        else:
-            print("Invalid command - Use 'h' or '?' for help")
+    def execute_command(self, command):
+        if command.strip() == "exit":
+            print("Exiting AIShell...")
+            self.running = False
+            return
+
+        stdout, stderr = self.command_executor.execute(command)
+        if stdout:
+            print(stdout, end='')
+        if stderr:
+            print(stderr, file=sys.stderr, end='')
+        self.context_manager.add_command(command, stdout, stderr)
 
     def handle_ctrl_e_n(self):
         instruction = self.terminal_controller.get_input("Enter instruction: ")
@@ -135,6 +131,12 @@ class AIShell:
                 else:
                     print("Execution limit reached. Use 'Ctrl-E l' to set a new limit.")
 
+    def handle_ctrl_e_s(self):
+        self.command_executor.stop_current_command()
+        self.interactive_mode = True
+        self.execution_count = 0
+        print("Execution stopped and switched to interactive mode.")
+
     def handle_ctrl_e_a(self):
         question = self.terminal_controller.get_input("Enter question: ")
         context = self.context_manager.get_context(for_question=True)
@@ -149,24 +151,6 @@ class AIShell:
             print(f"Execution limit set to {'unlimited' if self.execution_limit is None else self.execution_limit}")
         except ValueError:
             print("Invalid input. Please enter a number.")
-    def execute_command(self, command):
-        if command.strip() == "exit":
-            print("Exiting AIShell...")
-            self.running = False
-            return
-
-        stdout, stderr = self.command_executor.execute(command)
-        if stdout:
-            print(stdout, end='')
-        if stderr:
-            print(stderr, file=sys.stderr, end='')
-        self.context_manager.add_command(command, stdout, stderr)
-
-    def handle_ctrl_e_s(self):
-        self.command_executor.stop_current_command()
-        self.interactive_mode = True
-        self.execution_count = 0
-        print("Execution stopped and switched to interactive mode.")
 
     def handle_ctrl_e_i(self):
         self.interactive_mode = not self.interactive_mode
@@ -183,7 +167,7 @@ class AIShell:
         i: Toggle interactive mode
         h or ?: Display this help message
         
-        Press Enter or any other key to exit Ctrl-I mode
+        Press Enter or any other key to exit Ctrl-E mode
         """
         print(help_text)
 
