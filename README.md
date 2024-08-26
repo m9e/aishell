@@ -4,11 +4,11 @@ AIShell is an interactive AI-powered shell that allows users to execute commands
 
 ## Examples
 
-### Telling the shell to create a container
+### Telling the shell to create a container (note the retry on error)
 
 ![Telling the shell to create a container](img1.png)
 
-### Listing Code - Shell Maintains Context
+### Listing Code - Shell Maintains Context - this is just to set up for SS 3 below
 
 ![Listing Code - Shell Maintains Context](img2.png)
 
