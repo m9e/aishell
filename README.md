@@ -2,6 +2,20 @@
 
 AIShell is an interactive AI-powered shell that allows users to execute commands, generate new commands based on natural language instructions, and query the context of their session.
 
+## Examples
+
+### Telling the shell to create a container
+
+![Telling the shell to create a container](img1.png)
+
+### Listing Code - Shell Maintains Context
+
+![Listing Code - Shell Maintains Context](img2.png)
+
+### Asking for code recap from shell history, which includes stdin/out/err
+
+![Asking for code recap from shell history, which includes stdin/out/err](img3.png)
+
 ## Installation
 
 1. Clone the repository:
