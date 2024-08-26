@@ -1,6 +1,8 @@
 # aishell.py
 import os
 import sys
+import platform
+import shutil
 import signal
 import termios
 import json
@@ -113,33 +115,41 @@ class AIShell:
         else:
             print("Invalid command - Use 'h' or '?' for help")
 
+
     def execute_command(self, command):
         if command.strip() == "exit":
             print("Exiting AIShell...")
             self.running = False
-            return "", ""  # Return empty strings for stdout and stderr
+            return "", "", 0
 
-        stdout, stderr = self.command_executor.execute(command)
-        if stdout:
-            print(stdout, end='')
-        if stderr:
-            print(stderr, file=sys.stderr, end='')
-        self.context_manager.add_command(command, stdout, stderr)
-        
-        # Update the current working directory only for simple cd commands
-        if command.strip().startswith("cd ") and " && " not in command and ";" not in command:
-            new_dir = command.strip()[3:].strip()
-            try:
-                os.chdir(os.path.expanduser(new_dir))
-            except FileNotFoundError:
-                print(f"Directory not found: {new_dir}", file=sys.stderr)
-            except NotADirectoryError:
-                print(f"Not a directory: {new_dir}", file=sys.stderr)
+        try:
+            stdout, stderr = self.command_executor.execute(command)
+            return_code = self.command_executor.last_return_code  # Assuming we add this attribute to CommandExecutor
 
-        # Update the prompt with the new current working directory
-        self.update_prompt()
+            if stdout:
+                print(stdout, end='')
+            if stderr:
+                print(stderr, file=sys.stderr, end='')
 
-        return stdout, stderr
+            self.context_manager.add_command(command, stdout, stderr)
+            
+            # Update the current working directory only for simple cd commands
+            if command.strip().startswith("cd ") and " && " not in command and ";" not in command:
+                new_dir = command.strip()[3:].strip()
+                try:
+                    os.chdir(os.path.expanduser(new_dir))
+                except FileNotFoundError:
+                    print(f"Directory not found: {new_dir}", file=sys.stderr)
+                except NotADirectoryError:
+                    print(f"Not a directory: {new_dir}", file=sys.stderr)
+
+            # Update the prompt with the new current working directory
+            self.update_prompt()
+
+            return stdout, stderr, return_code
+        except Exception as e:
+            print(f"An error occurred while executing the command: {str(e)}", file=sys.stderr)
+            return "", str(e), 1
 
     def update_prompt(self):
         self.session.message = lambda: f"{os.getcwd()}$ "
@@ -203,8 +213,36 @@ class AIShell:
         self.process_instruction(instruction)
 
 
+    def get_system_info(self):
+        system_info = {
+            "os": platform.system(),
+            "os_version": platform.version(),
+            "architecture": platform.machine(),
+        }
+
+        # Check for common software
+        for software in ["docker", "docker-compose", "brew"]:
+            system_info[f"{software}_installed"] = shutil.which(software) is not None
+
+        # If on macOS, check for Docker Desktop
+        if system_info["os"] == "Darwin":
+            try:
+                result = subprocess.run(["pgrep", "-f", "Docker.app"], capture_output=True, text=True)
+                system_info["docker_desktop_running"] = result.returncode == 0
+            except:
+                system_info["docker_desktop_running"] = False
+
+        return system_info
+
     def process_instruction(self, instruction):
+        # Get system information
+        system_info = self.get_system_info()
+        
+        # Add system information to the context
+        system_info_str = "System Information:\n" + "\n".join([f"{k}: {v}" for k, v in system_info.items()])
         context = self.context_manager.get_context()
+        context.append({"role": "system", "content": system_info_str})
+
         continue_execution = True
         
         while continue_execution and self.running:
@@ -242,10 +280,21 @@ class AIShell:
                         self.print_green(f"Executing: {bash_command}")
 
                     if self.execution_limit is None or self.execution_count < self.execution_limit:
-                        stdout, stderr = self.execute_command(bash_command)
+                        stdout, stderr, return_code = self.execute_command(bash_command)
                         if not self.running:
                             return  # Exit if the 'exit' command was executed
                         self.execution_count += 1
+                        
+                        if return_code != 0:
+                            print(f"Command failed with return code {return_code}")
+                            print(f"stdout: {stdout}")
+                            print(f"stderr: {stderr}")
+                            
+                            # Provide feedback to the LLM and ask for correction
+                            correction_instruction = f"The previous command '{bash_command}' failed with return code {return_code}. stdout: {stdout}, stderr: {stderr}. Please provide a corrected command or explain why it failed and suggest an alternative approach."
+                            context.append({"role": "user", "content": correction_instruction})
+                            continue_execution = True
+                            continue
                         
                         # Update context with the latest command and its output
                         context = self.context_manager.get_context()
@@ -259,6 +308,7 @@ class AIShell:
                 else:
                     print("Failed to generate a valid command.")
                     return
+
             except Exception as e:
                 print(f"An error occurred: {str(e)}")
                 print("Traceback:")
