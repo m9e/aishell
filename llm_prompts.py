@@ -15,12 +15,12 @@ class LLMPrompts:
     When outputting a command, you should:
     1. Think carefully about what the user is asking and why.
     2. Consider the system information provided and tailor your command to the specific environment.
-    3. Formulate a SINGLE bash command that will be the next executed for the user; if you expect to run more commands to accomplish the goal, then include, "{{'continue': true}}" as an extra attribute
+    3. Formulate a SINGLE bash command that will be the next executed for the user; and ALSO if you expect to run more commands to accomplish the goal, then include, "{{'continue': true}}" as an extra attribute
     4. Review your initial assessment and consider alternatives.
     5. Output the final SINGLE command using the JSON format: {{"bash": "<command>"[, 'continue': true]}}
 
     Important notes:
-    - Output ONLY ONE command at a time. If a task requires multiple steps, include the 'continue': true attribute in your output; you will have a chance to respond and will have the stdout/err from the previous step
+    - Output ONLY ONE command at a time, but IF the command you are running will not complete the task to user satisfaction, include the 'continue': true attribute in your output; you will have a chance to respond and will have the stdout/err from the previous step
     - For file creation or modification, use heredoc syntax: 'cat <<EOF > filename\\ncontents\\nEOF'
     - The interpreter will execute your JSON-formatted bash command. Other content will NOT be executed.
     - You may add a note using: {{"savecontext": "<context>"}} as an ADDITIONAL attribute - you must still include a command. The interpreter will prioritize returning this to you.
@@ -28,7 +28,7 @@ class LLMPrompts:
     - Commands from you (assistant) were determined and run by you, with the response provided.
     - Be extremely careful with commands that can modify the user's environment, overwrite files, or change packages.
 
-    Remember: Always generate a SINGLE command that directly addresses the user's most recent instruction, taking into account the provided system information. Do not be influenced by unrelated previous context or examples.
+    Remember: Always generate a SINGLE command that directly addresses the user's most recent instruction (and including flag as needed or not), taking into account the provided system information. Do not be influenced by unrelated previous context or examples.
     """)
 
     QUESTION_ANSWERING = textwrap.dedent("""

@@ -6,6 +6,7 @@ import shutil
 import signal
 import termios
 import json
+import html
 import tty
 import traceback
 from prompt_toolkit import PromptSession, print_formatted_text, HTML
@@ -14,6 +15,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit import print_formatted_text, HTML
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.styles import Style
 from pygments.lexers.shell import BashLexer
 from llm_interface import LLMInterface
@@ -76,7 +78,8 @@ class AIShell:
             style = Style.from_dict({
                 'debug': '#FFFF00 bold',
             })
-            print_formatted_text(HTML(f"<debug>{message}</debug>"), style=style)
+            escaped_message = html.escape(str(message))
+            print_formatted_text(HTML(f"<debug>{escaped_message}</debug>"), style=style)
 
 
 
@@ -240,18 +243,6 @@ class AIShell:
             "architecture": platform.machine(),
         }
 
-        # Check for common software
-        for software in ["docker", "docker-compose", "brew"]:
-            system_info[f"{software}_installed"] = shutil.which(software) is not None
-
-        # If on macOS, check for Docker Desktop
-        if system_info["os"] == "Darwin":
-            try:
-                result = subprocess.run(["pgrep", "-f", "Docker.app"], capture_output=True, text=True)
-                system_info["docker_desktop_running"] = result.returncode == 0
-            except:
-                system_info["docker_desktop_running"] = False
-
         return system_info
 
     def process_instruction(self, instruction):
@@ -338,11 +329,13 @@ class AIShell:
                 traceback.print_exc()
                 return
 
+
     def print_green(self, text):
         style = Style.from_dict({
             'green': '#00ff00 bold',
         })
         print_formatted_text(FormattedText([('class:green', text)]), style=style)
+
 
 
     def handle_interrupt(self, signum, frame):
