@@ -1,4 +1,5 @@
 # llm_interface.py
+
 import os
 import json
 import sys
@@ -39,15 +40,17 @@ class LLMInterface:
 
         response = self.call_llm(messages, system_content)
         
-        if response:
-            try:
-                command_json = json.loads(response)
-                if "bash" in command_json:
-                    return command_json["bash"]
-            except json.JSONDecodeError:
-                pass
-        
-        return None
+        if response is None:
+            return None, "Failed to generate a command. There might be an issue with the LLM service."
+
+        try:
+            command_json = json.loads(response)
+            if "bash" in command_json:
+                return command_json["bash"], None
+            else:
+                return None, f"Invalid response format from LLM: {response}"
+        except json.JSONDecodeError:
+            return None, f"Failed to parse LLM response as JSON: {response}"
 
     def answer_question(self, question, context):
         messages = context + [
@@ -56,4 +59,7 @@ class LLMInterface:
 
         system_content = LLMPrompts.QUESTION_ANSWERING
 
-        return self.call_llm(messages, system_content)
+        response = self.call_llm(messages, system_content)
+        if response is None:
+            return "Failed to generate an answer. There might be an issue with the LLM service."
+        return response

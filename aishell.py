@@ -196,7 +196,7 @@ class AIShell:
         print()  # Add a newline after exiting raw mode
         instruction = input("Enter instruction: ")
         context = self.context_manager.get_context()
-        bash_command = self.llm_interface.generate_command(
+        bash_command, error = self.llm_interface.generate_command(
             instruction, 
             context, 
             self.interactive_mode, 
@@ -204,6 +204,10 @@ class AIShell:
             self.execution_limit or "unlimited"
         )
         
+        if error:
+            print(f"Error generating command: {error}")
+            return
+
         if bash_command:
             print(f"Generated command: {bash_command}")
             if self.interactive_mode:
@@ -215,6 +219,8 @@ class AIShell:
                     self.execution_count += 1
                 else:
                     print("Execution limit reached. Use 'Ctrl-E l' to set a new limit.")
+        else:
+            print("Failed to generate a valid command.")
 
     def handle_interrupt(self, signum, frame):
         if self.ctrl_e_active:
