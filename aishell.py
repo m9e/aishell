@@ -3,7 +3,9 @@ import os
 import sys
 import signal
 import termios
+import json
 import tty
+import traceback
 from prompt_toolkit import PromptSession, print_formatted_text, HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.history import FileHistory
@@ -115,7 +117,7 @@ class AIShell:
         if command.strip() == "exit":
             print("Exiting AIShell...")
             self.running = False
-            return
+            return "", ""  # Return empty strings for stdout and stderr
 
         stdout, stderr = self.command_executor.execute(command)
         if stdout:
@@ -136,6 +138,8 @@ class AIShell:
 
         # Update the prompt with the new current working directory
         self.update_prompt()
+
+        return stdout, stderr
 
     def update_prompt(self):
         self.session.message = lambda: f"{os.getcwd()}$ "
@@ -191,36 +195,82 @@ class AIShell:
     def enter_raw_mode(self):
         tty.setraw(sys.stdin.fileno())
 
+
     def handle_ctrl_e_n(self):
         self.exit_raw_mode()
         print()  # Add a newline after exiting raw mode
         instruction = input("Enter instruction: ")
-        context = self.context_manager.get_context()
-        bash_command, error = self.llm_interface.generate_command(
-            instruction, 
-            context, 
-            self.interactive_mode, 
-            self.execution_limit - self.execution_count if self.execution_limit else "unlimited",
-            self.execution_limit or "unlimited"
-        )
-        
-        if error:
-            print(f"Error generating command: {error}")
-            return
+        self.process_instruction(instruction)
 
-        if bash_command:
-            print(f"Generated command: {bash_command}")
-            if self.interactive_mode:
-                if self.user_interface.confirm_execution():
-                    self.execute_command(bash_command)
-            else:
-                if self.execution_limit is None or self.execution_count < self.execution_limit:
-                    self.execute_command(bash_command)
-                    self.execution_count += 1
+
+    def process_instruction(self, instruction):
+        context = self.context_manager.get_context()
+        continue_execution = True
+        
+        while continue_execution and self.running:
+            try:
+                bash_command, error = self.llm_interface.generate_command(
+                    instruction, 
+                    context, 
+                    self.interactive_mode, 
+                    self.execution_limit - self.execution_count if self.execution_limit else "unlimited",
+                    self.execution_limit or "unlimited"
+                )
+                
+                if error:
+                    print(f"Error generating command: {error}")
+                    return
+
+                if bash_command:
+                    try:
+                        command_data = json.loads(bash_command)
+                        bash_command = command_data.get('bash')
+                        if not bash_command:
+                            print("Error: 'bash' key not found in command data")
+                            return
+                        continue_execution = command_data.get('continue', False)
+                    except json.JSONDecodeError:
+                        print(f"Error parsing command JSON: {bash_command}")
+                        return
+
+                    if self.interactive_mode:
+                        print(f"Generated command: {bash_command}")
+                        if not self.user_interface.confirm_execution():
+                            print("Command execution cancelled.")
+                            return
+                    else:
+                        self.print_green(f"Executing: {bash_command}")
+
+                    if self.execution_limit is None or self.execution_count < self.execution_limit:
+                        stdout, stderr = self.execute_command(bash_command)
+                        if not self.running:
+                            return  # Exit if the 'exit' command was executed
+                        self.execution_count += 1
+                        
+                        # Update context with the latest command and its output
+                        context = self.context_manager.get_context()
+                        
+                        if bash_command.startswith("echo ") and "reason to stop" in bash_command:
+                            print(f"\nAI Assistant stopped execution: {stdout.strip()}")
+                            return
+                    else:
+                        print("Execution limit reached. Use 'Ctrl-E l' to set a new limit.")
+                        return
                 else:
-                    print("Execution limit reached. Use 'Ctrl-E l' to set a new limit.")
-        else:
-            print("Failed to generate a valid command.")
+                    print("Failed to generate a valid command.")
+                    return
+            except Exception as e:
+                print(f"An error occurred: {str(e)}")
+                print("Traceback:")
+                traceback.print_exc()
+                return
+
+    def print_green(self, text):
+        style = Style.from_dict({
+            'green': '#00ff00 bold',
+        })
+        print_formatted_text(FormattedText([('class:green', text)]), style=style)
+
 
     def handle_interrupt(self, signum, frame):
         if self.ctrl_e_active:

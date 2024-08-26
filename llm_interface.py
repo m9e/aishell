@@ -3,6 +3,7 @@
 import os
 import json
 import sys
+import re
 from openai import AzureOpenAI
 from llm_prompts import LLMPrompts
 
@@ -26,6 +27,7 @@ class LLMInterface:
             print(f"Error calling LLM: {e}", file=sys.stderr)
             return None
 
+
     def generate_command(self, instruction, context, interactive_mode, remaining_commands, limit):
         messages = [
             {"role": "user", "content": f"aishell command: {instruction}"}
@@ -43,14 +45,25 @@ class LLMInterface:
         if response is None:
             return None, "Failed to generate a command. There might be an issue with the LLM service."
 
+        # Strip markdown code block if present
+        json_match = re.search(r'```(?:json)?\s*({\s*"bash":\s*.*?})\s*```', response, re.DOTALL)
+        if json_match:
+            response = json_match.group(1)
+        else:
+            # If no code block, try to find JSON object directly
+            json_match = re.search(r'({.*?"bash".*?})', response, re.DOTALL)
+            if json_match:
+                response = json_match.group(1)
+
         try:
             command_json = json.loads(response)
             if "bash" in command_json:
-                return command_json["bash"], None
+                return json.dumps(command_json), None
             else:
                 return None, f"Invalid response format from LLM: {response}"
         except json.JSONDecodeError:
             return None, f"Failed to parse LLM response as JSON: {response}"
+
 
     def answer_question(self, question, context):
         messages = context + [
