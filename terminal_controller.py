@@ -8,6 +8,7 @@ import subprocess
 class TerminalController:
     def __init__(self):
         self.old_settings = termios.tcgetattr(sys.stdin)
+        self.ctrl_e_active = False
 
     def __enter__(self):
         tty.setraw(sys.stdin.fileno())
@@ -20,7 +21,7 @@ class TerminalController:
         return os.read(sys.stdin.fileno(), 1)
 
     def handle_ctrl_e(self):
-        sys.stdout.write("\nInstruction? (n/s/a/l/i): ")
+        sys.stdout.write("\nAIShell Instruction (n/s/a/l/i/h/?): ")
         sys.stdout.flush()
         char = self.getch()
         sys.stdout.write(char.decode('utf-8') + '\n')
@@ -82,3 +83,10 @@ class TerminalController:
         )
         stdout, stderr = process.communicate()
         return stdout, stderr
+
+    def handle_ctrl_c(self):
+        if self.ctrl_e_active:
+            print("\nExiting Ctrl-E mode")
+            self.ctrl_e_active = False
+            return True
+        return False
