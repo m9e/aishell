@@ -1,5 +1,9 @@
 # aishell.py
 import os
+import getpass
+import socket
+import glob
+import stat
 import sys
 import platform
 import shutil
@@ -14,7 +18,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.lexers import PygmentsLexer
-from prompt_toolkit import print_formatted_text, HTML
+from prompt_toolkit.completion import Completer, Completion, PathCompleter, CompleteEvent
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.styles import Style
 from pygments.lexers.shell import BashLexer
@@ -23,6 +27,26 @@ from command_executor import CommandExecutor
 from context_manager import ContextManager
 from user_interface import UserInterface
 from terminal_controller import TerminalController
+
+class BashLikeCompleter(Completer):
+    def __init__(self):
+        self.path_completer = PathCompleter(expanduser=True)
+    
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if text.startswith('./'):
+            # Complete only executable files
+            path = text[2:]
+            dirname = os.path.dirname(path) or '.'
+            basename = os.path.basename(path)
+            matches = glob.glob(os.path.join(dirname, basename) + '*')
+            for match in matches:
+                if os.path.isfile(match) and os.access(match, os.X_OK):
+                    yield Completion(match[len(path):], start_position=0)
+        else:
+            # General path completion
+            yield from self.path_completer.get_completions(document, complete_event)
+
 
 class AIShell:
     def __init__(self):
@@ -37,7 +61,11 @@ class AIShell:
         self.execution_limit = None
         self.execution_count = 0
         self.debug_mode = False
+        self.interrupt_counter = 0
+        self.version = 0.1
+        self.last_dir = None
 
+        self.last_dir = os.getcwd()
         self.kb = KeyBindings()
         self.setup_key_bindings()
         
@@ -45,7 +73,8 @@ class AIShell:
             history=FileHistory(os.path.expanduser('~/.aishell_history')),
             auto_suggest=AutoSuggestFromHistory(),
             lexer=PygmentsLexer(BashLexer),
-            key_bindings=self.kb
+            key_bindings=self.kb,
+            completer=BashLikeCompleter()
         )
 
         # Handle Ctrl-C globally to exit the app
@@ -65,6 +94,43 @@ class AIShell:
                 self.ctrl_e_active = False
                 event.app.exit()
 
+        @self.kb.add('tab')
+        def _(event):
+            buff = event.current_buffer
+            completer = buff.completer
+            document = buff.document
+
+            completions = list(completer.get_completions(document, complete_event=CompleteEvent()))
+            if len(completions) == 1:
+                buff.insert_text(completions[0].text)
+            elif len(completions) > 1:
+                if event.is_repeat:
+                    # Second Tab press, list all completions
+                    print()
+                    for c in completions:
+                        print(c.text)
+                    buff.start_completion(select_first=False)
+                else:
+                    buff.start_completion(select_first=False)
+            else:
+                buff.insert_text('\t')
+
+        @self.kb.add('c-d')  # Custom handling for Ctrl-D
+        def _(event):
+            buffer = event.current_buffer
+            if buffer.text:  # If there's text, clear the buffer
+                buffer.text = ''
+                buffer.cursor_position = 0
+            else:  # If no text, treat as EOF
+                self.interrupt_counter += 1
+                if self.interrupt_counter >= 3:
+                    print("\nExiting AIShell...")
+                    self.running = False
+                    event.app.exit()
+                else:
+                    print("\nInterrupt received. Press Ctrl-D {} more time(s) to exit.".format(3 - self.interrupt_counter))
+
+
     def display_aishell_status(self):
         print_formatted_text(HTML('\n<bold>AIShell</bold> '), end='', flush=True)
 
@@ -72,6 +138,8 @@ class AIShell:
     def toggle_debug_mode(self):
         self.debug_mode = not self.debug_mode
         print(f"Debug mode {'enabled' if self.debug_mode else 'disabled'}.")
+        # Re-instantiate LLMInterface with the new debug mode
+        self.llm_interface = LLMInterface(debug_mode=self.debug_mode)
 
     def print_debug(self, message):
         if self.debug_mode:
@@ -81,7 +149,12 @@ class AIShell:
             escaped_message = html.escape(str(message))
             print_formatted_text(HTML(f"<debug>{escaped_message}</debug>"), style=style)
 
-
+    def get_prompt(self):
+        user = getpass.getuser()
+        host = socket.gethostname()
+        cwd = os.getcwd()
+        version_str = f"aishell-{self.version:.1f}"  # Format the version as a float with one decimal place
+        return f"{version_str} {user}@{host}:{cwd}$ "
 
     def run(self):
         while self.running:
@@ -111,8 +184,11 @@ class AIShell:
                     print("\nExiting AIShell...")
                     self.running = False
                 else:
+                    print("\nwe should be clearing this but we won't because we suck")
+                    self.session.app.current_buffer.text = ''
                     print("\nUse Ctrl-D again to exit")
                 continue
+
             except Exception as e:
                 print(f"An error occurred: {str(e)}")
                 self.exit_raw_mode()
@@ -137,11 +213,13 @@ class AIShell:
             print("Invalid command - Use 'h' or '?' for help")
 
 
-    def execute_command(self, command):
+    def execute_command(self, command, from_llm=False):
         if command.strip() == "exit":
             print("Exiting AIShell...")
             self.running = False
             return "", "", 0
+
+        self.interrupt_counter = 0
 
         try:
             stdout, stderr = self.command_executor.execute(command)
@@ -152,12 +230,15 @@ class AIShell:
             if stderr:
                 print(stderr, file=sys.stderr, end='')
 
-            self.context_manager.add_command(command, stdout, stderr)
+            self.context_manager.add_command(command, stdout, stderr, from_llm=from_llm)
             
             # Update the current working directory only for simple cd commands
             if command.strip().startswith("cd ") and " && " not in command and ";" not in command:
                 new_dir = command.strip()[3:].strip()
                 try:
+                    if new_dir == "-":
+                        new_dir = self.last_dir
+                    self.last_dir = os.getcwd()
                     os.chdir(os.path.expanduser(new_dir))
                 except FileNotFoundError:
                     print(f"Directory not found: {new_dir}", file=sys.stderr)
@@ -218,7 +299,7 @@ class AIShell:
             "s: Stop executing (LLM goes passive)\n"
             "a: Ask a question (using terminal buffer as context)\n"
             "l: Set a limit (max number of actions without confirmation)\n"
-            "i: Toggle interactive mode\n"
+            "i: Toggle interactive mode (commands with sudo ALWAYS require confirmation)\n"
             "d: Toggle debug mode\n"
             "h or ?: Display this help message\n\n"
             "Press Enter or any other key to exit Ctrl-E mode\n"
@@ -232,7 +313,12 @@ class AIShell:
     def handle_ctrl_e_n(self):
         self.exit_raw_mode()
         print()  # Add a newline after exiting raw mode
-        instruction = input("Enter instruction: ")
+        instruction = input("Enter instruction: ").strip()  # Strip any surrounding whitespace
+
+        if not instruction:  # If the instruction is empty after trimming
+            print("No instruction provided. Returning to interactive shell.")
+            return  # Do nothing, just return to the interactive shell
+
         self.process_instruction(instruction)
 
 
@@ -249,7 +335,6 @@ class AIShell:
         system_info = self.get_system_info()
         system_info_str = "System Information:\n" + "\n".join([f"{k}: {v}" for k, v in system_info.items()])
         context = self.context_manager.get_context()
-        context.append({"role": "system", "content": system_info_str})
 
         continue_execution = True
         
@@ -259,11 +344,12 @@ class AIShell:
                 self.print_debug(f"Context: {json.dumps(context, indent=2)}")
 
                 bash_command, error = self.llm_interface.generate_command(
-                    instruction, 
-                    context, 
-                    self.interactive_mode, 
-                    self.execution_limit - self.execution_count if self.execution_limit else "unlimited",
-                    self.execution_limit or "unlimited"
+                    instruction=instruction, 
+                    context=context, 
+                    interactive_mode=self.interactive_mode, 
+                    remaining_commands=self.execution_limit - self.execution_count if self.execution_limit else "unlimited",
+                    limit=self.execution_limit or "unlimited",
+                    system_info=system_info_str
                 )
                 
                 if error:
@@ -287,7 +373,7 @@ class AIShell:
                         print(f"Error parsing command JSON: {bash_command}")
                         return
 
-                    if self.interactive_mode:
+                    if self.interactive_mode or bash_command.startswith('sudo') or 'sudo ' in bash_command:
                         print(f"Generated command: {bash_command}")
                         if not self.user_interface.confirm_execution():
                             print("Command execution cancelled.")
@@ -306,7 +392,7 @@ class AIShell:
                             print(f"stdout: {stdout}")
                             print(f"stderr: {stderr}")
                             
-                            correction_instruction = f"The previous command '{bash_command}' failed with return code {return_code}. stdout: {stdout}, stderr: {stderr}. Please provide a corrected command or explain why it failed and suggest an alternative approach."
+                            correction_instruction = f"Automated interpreter message: The previous command '{bash_command}' failed with return code {return_code}. stdout: {stdout}, stderr: {stderr}. Please provide a corrected command or explain why it failed and suggest an alternative approach (with an echo)"
                             context.append({"role": "user", "content": correction_instruction})
                             continue_execution = True
                             continue
@@ -337,17 +423,24 @@ class AIShell:
         print_formatted_text(FormattedText([('class:green', text)]), style=style)
 
 
-
     def handle_interrupt(self, signum, frame):
-        if self.ctrl_e_active:
-            print("\nExiting Ctrl-E mode")
-            self.exit_raw_mode()  # Restore terminal settings
-            self.ctrl_e_active = False
+        # Check if there is a running command
+        if self.current_process:
+            # Stop the running command (call to stop_current_command from CommandExecutor)
+            print("\nCommand interrupted")
+            self.command_executor.stop_current_command()
+            self.current_process = None
+            self.interrupt_counter = 0  # Reset the counter after successfully interrupting a command
         else:
-            print("\nInterrupt received, exiting AIShell...")
-            self.exit_raw_mode()  # Ensure raw mode is off
-            self.running = False
-            sys.exit(0)
+            # No active command, count the Ctrl-C presses
+            self.interrupt_counter += 1
+            if self.interrupt_counter >= 3:
+                print("\nMultiple interrupts received, exiting AIShell...")
+                self.running = False
+                sys.exit(0)
+            else:
+                print("\nInterrupt received. Press Ctrl+C {} more time(s) to exit.".format(3 - self.interrupt_counter))
+
 
 def main():
     aishell = AIShell()

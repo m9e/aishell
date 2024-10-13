@@ -22,11 +22,14 @@ class ContextManager:
 
     def add_command(self, input_cmd, stdout, stderr, from_llm=False):
         content = json.dumps({"input": input_cmd, "stdout": stdout, "stderr": stderr})
-        self.add_message("user" if not from_llm else "assistant", content)
-        self.add_message("assistant" if not from_llm else "user", "")
+        self.add_message("user", content if not from_llm else "")
+        self.add_message("assistant", content if from_llm else "")
+        #self.add_message("user" if not from_llm else "assistant", content)
+        #self.add_message("assistant" if not from_llm else "user", "")
 
     def save_context(self, context):
         self.saved_contexts.append({"role": "user", "content": f"{{\"savedcontext\": \"{context}\"}}"})
+        self.saved_contexts.append({"role": "assistant", "content": ""})
 
     def get_context(self, for_question=False):
         if for_question:
